@@ -4,9 +4,6 @@ use structopt::StructOpt;
 pub enum Command {
     #[structopt(name = "init")]
      Init {
-        // #[structopt(default_value = "World")]
-        // name:String,
-        //add implementation
     },
     #[structopt(name = "add")]
     Add {
@@ -47,7 +44,7 @@ pub enum Command {
     },
     #[structopt(name = "switch")]
     Switch {
-
+        branch:String,
     },
     #[structopt(name = "stash")]
     Stash {
@@ -70,6 +67,14 @@ pub struct  CommitOpts {
     pub all:bool,
     #[structopt(short="m",long = "message",help="user types message")]
     pub message:bool,
+}
+
+#[derive(Debug,StructOpt)]
+pub struct  StashOpts {
+    #[structopt(long = "apply",help="aplly without deliting")]
+    pub apply:bool,
+    #[structopt(long = "pop",help="aplly saved")]
+    pub pop:bool,
 }
 
 #[derive(Debug,StructOpt)]
@@ -98,7 +103,7 @@ pub fn use_command() {
 
     match opt.command {
             Command::Init { } => {
-                not_implemented();
+                // init();
             }
         Command::Add { path ,opts} =>  {
             not_implemented();
@@ -115,7 +120,7 @@ pub fn use_command() {
         Command::Diff { first_hash } => todo!(),
         Command::Branch { opts } => todo!(),
         Command::Checkout { branch, opts } => todo!(),
-        Command::Switch {  } => todo!(),
+        Command::Switch { branch  } => todo!(),
         Command::Stash {  } => todo!(),
      }
 }
@@ -124,3 +129,4 @@ pub fn use_command() {
  fn not_implemented() {
     println!("not implemented");
 }
+
