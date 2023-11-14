@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 structopt = "0.3.26"
 command_parser = {path = "./command_parser"}
+git_worker = {path = "./git_worker"}

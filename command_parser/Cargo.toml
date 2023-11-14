@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 structopt = "0.3.17"
+git_worker = {path = "./git_worker"}

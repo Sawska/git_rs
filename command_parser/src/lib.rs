@@ -1,4 +1,5 @@
 use structopt::StructOpt;
+use git_worker::{init,add_all,reset,commit};
 
 #[derive(Debug,StructOpt)]
 pub enum Command {
@@ -7,16 +8,15 @@ pub enum Command {
     },
     #[structopt(name = "add")]
     Add {
-        #[structopt(default_value=".")]
         path:String,
         #[structopt(flatten)]
         opts:AddOptions,
 
-        //add implementation
+        
     },
     #[structopt(name = "reset")]
     Reset {
-        //  //add implementation
+        
     },
     #[structopt(name = "commit")]
     Commit {
@@ -66,7 +66,7 @@ pub struct  CommitOpts {
     #[structopt(short="a",long = "all",help="Commits all files")]
     pub all:bool,
     #[structopt(short="m",long = "message",help="user types message")]
-    pub message:bool,
+    pub message:Option<String>
 }
 
 #[derive(Debug,StructOpt)]
@@ -103,16 +103,22 @@ pub fn use_command() {
 
     match opt.command {
             Command::Init { } => {
-                // init();
+                init();
             }
         Command::Add { path ,opts} =>  {
-            not_implemented();
+            
+            if let Some(all) = opts.all {
+                add_all("../../.gitrs");
+            } else {
+                add_all(&path);
+            }
+            
         },
         Command::Reset {  } => {
-            not_implemented();
+            reset();
         },
         Command::Commit { opts } => {
-            not_implemented();
+            commit();
         },
         Command::Status {  } => {
             not_implemented();
