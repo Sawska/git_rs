@@ -1,14 +1,42 @@
 use std::io::{self,BufRead, Read,Write};
 use std::fs::{self,File,OpenOptions};
+use std::collections::HashMap;
 use std::time::{SystemTime,UNIX_EPOCH};
 use std::path::{Path,PathBuf};
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use sha1::{Sha1,Digest as OtherDigest};
+use std::env;
 
 enum TreeEntry {
-    Blob {mode: &'static str,hash:String,name:String},
-    Tree {mode: &'static str,hash:String,name:String,entries:Vec<TreeEntry>},
+    Blob {mode: String,hash:String,name:String},
+    Tree {mode: String,hash:String,name:String,entries:Vec<TreeEntry>},
+}
+
+struct Commit {
+    hash:String,
+    message:String,
+    author:String,
+    timestamp:u64,
+    parents:Vec<String>
+}
+
+struct  ObjectDatabase {
+    commits:HashMap<String,Commit>,
+}
+
+impl ObjectDatabase {
+    fn new() -> Self {
+        ObjectDatabase { commits: HashMap::new() }
+    }
+
+    fn store_commit(&mut self,commit:Commit) {
+        self.commits.insert(commit.hash.clone(), commit);
+    }
+
+    fn get_commit(&self,hash: &str) -> Option<&Commit> {
+        self.commits.get(hash)
+    }
 }
 
 enum IndexCheckResult {
@@ -20,21 +48,26 @@ enum IndexCheckResult {
 
 pub fn init() {
     let _ = fs::create_dir_all("../../.gitrs");
+    env::set_var(".gitrs", "../../.gitrs");
     // pointers to specific commit
     let _ = fs::create_dir_all("../../.gitrs/refs");
+    env::set_var("refs", "../../.gitrs/refs");
     // git stores commits here
     let _ = fs::create_dir_all("../../.gitrs/objects");
-
+    env::set_var("objects", "../../.gitrs/objects");
     //contains references to the heads of branches.
     let _ = File::create("../../.gitrs/refs/heads");
+    env::set_var("heads_ref", "../../.gitrs/refs/heads");
 
     //points to the last commit
-    let _ = File::create("../../gitrs/HEAD");
+    let _ = File::create("../../.gitrs/HEAD");
+    env::set_var("heads", "../../.gitrs/HEAD");
 
     //stored permanents add files
-    let _ = File::create("../../gitrs/index");
+    let _ = File::create("../../.gitrs/index");
+    env::set_var("index", "../../.gitrs/index");
 
-    println!("create .gitrs file");
+    println!("created .gitrs file");
 }
 
 pub fn add_all(base_directory:&str) -> io::Result<()> {
@@ -49,7 +82,7 @@ pub fn add_all(base_directory:&str) -> io::Result<()> {
                 } else if path.is_file() {
                     match check_if_in_index(path.to_str().unwrap()) {
                         IndexCheckResult::InIndex(hashed_line) => {
-                            remove_file_from_index("../../.gitrs/index",&hashed_line)?;
+                            remove_file_from_index(env::var("index").unwrap().as_str(),&hashed_line)?;
                         }
                         IndexCheckResult::NotInIndex => {
                             add_to_objects(&path.to_str().unwrap())?;
@@ -67,12 +100,12 @@ pub fn add_all(base_directory:&str) -> io::Result<()> {
 }
 
 fn read_info_from_commit() -> Option<PathBuf> {
-    let commit = match fs::read_to_string("../../gitrs/HEAD") {
+    let commit = match fs::read_to_string(env::var("heads").unwrap()) {
         Ok(commit) => commit,
         Err(_) => return None,
     };
 
-    let commit_path = Path::new("../../.gitrs/objects").join(&commit[0..2]).join(&commit[2..]);
+    let commit_path = Path::new(env::var("objects").unwrap().as_str()).join(&commit[0..2]).join(&commit[2..]);
 
     if commit_path.is_dir() {
         Some(commit_path)
@@ -103,11 +136,12 @@ fn add_to_objects(path:&str) -> io::Result<()> {
 
     let name_dir = &arr[0][0..1];
 
-    fs::create_dir(format!("../../.gitrs/objects/{}",name_dir))?;
+    let objects_dir = env::var("objects").unwrap_or_else(|_| String::from(".gitrs/objects"));
+    fs::create_dir(format!("{}/{}",objects_dir,name_dir))?;
 
     let another_name = &arr.join("");
 
-    let file_path = format!("../../.gitrs/objects/{}.bin",another_name);
+    let file_path = format!("{}/{}.bin", objects_dir, another_name);
 
     let file_path_clone = file_path.clone();
 
@@ -117,14 +151,14 @@ fn add_to_objects(path:&str) -> io::Result<()> {
         file.write_all(line.as_bytes())?;
     }
 
-    add_to_index(&arr,&file_path);
+    let _ = add_to_index(&arr,&file_path);
 
     Ok(())
 }
 
 fn add_to_index(arr: &Vec<String>,file_path:&str) -> io::Result<()> {
 
-    let mut index_file = OpenOptions::new().create(true).append(true).open("../../.girts/index")?;
+    let mut index_file = OpenOptions::new().create(true).append(true).open(env::var("index").unwrap())?;
 
     for line in arr {
         let index_line = format!("{} 100644 {}",line,file_path);
@@ -136,7 +170,7 @@ fn add_to_index(arr: &Vec<String>,file_path:&str) -> io::Result<()> {
 }
 
 fn check_if_in_index(file_path: &str) -> IndexCheckResult {
-    let index_file = match File::open("../../.gitrs/index") {
+    let index_file = match File::open(env::var("index").unwrap()) {
         Ok(file) => file,
         Err(err) => return IndexCheckResult::Error(err),
     };
@@ -186,19 +220,58 @@ fn remove_file_from_index(file_path: &str, hashed_line: &str) -> io::Result<()> 
     Ok(())
 }
 
-pub fn create_commit(base_directory:&str,author:&str,commiter:&str,commit_message:&str) {
-        let tree_hash = match create_tree_from_index(base_directory) {
-            Ok(tree) => hash_tree(tree),
-            Err(_) => {
-                eprintln!("Error:Unable to create the tree object.");
-                return;
-            },
-        };
+pub fn create_commit(base_directory: &str, author: &str, committer: &str, commit_message: &str) {
+    // Create the tree
+    let tree_hash = match create_tree_from_index(base_directory) {
+        Ok(tree) =>  {
 
-        match create_commit_object(author,commiter,&tree_hash,commit_message) {
-            Ok(()) => println!("Commit create succesfully."),
-            Err(err) => eprintln!("Error: {:?}",err),
-        }
+            let head = read_head().unwrap(); // ref: refs/heads/main\n
+    let hash = read_from_refs(head).unwrap();
+
+    let first_tree = rebuild_tree(hash);
+
+    match first_tree {
+        Ok(tree_opt) => {
+            match tree_opt {
+                Some(tree_rebuilt) => {
+                    attach_one_tree_to_another(&tree_rebuilt, &tree);
+                },
+                None => { }
+            }
+        },
+        Err(err) => eprintln!("{}", err),
+    }
+            hash_tree(tree)
+        },
+        Err(_) => {
+            eprintln!("Error: Unable to create the tree object.");
+            return;
+        },
+    };
+
+    // Create the commit object
+    match create_commit_object(author, committer, &tree_hash, commit_message) {
+        Ok(()) => println!("Commit created successfully."),
+        Err(err) => {
+            eprintln!("Error: {:?}", err);
+            return;
+        },
+    }
+}
+
+
+fn attach_one_tree_to_another(first_tree:&TreeEntry,second_tree:&TreeEntry) -> io::Result<TreeEntry> {
+    // attach first commit to another 
+    // if some files are still the same make them point to different commits
+}
+
+
+
+fn read_from_refs(path:String) -> io::Result<String> {
+    
+    let contents = fs::read_to_string(path);
+    contents
+    
 }
 
 
@@ -213,13 +286,24 @@ fn create_commit_object(author:&str,commiter:&str,tree_hash:&str,commit_message:
         tree_hash,author,timestamp,commiter,timestamp,commit_message
     );
 
-    let commit_hash = hash_line(&commit_content);
 
     let commit_hash = hash_line(&commit_content);
 
-    let commit_file_path = format!(".gitrs/objects/{}.bin",commit_hash);
+    let objects_path = env::var("objects").unwrap();
+    let commit_file_path = format!("{}/{}.bin",objects_path,commit_hash);
     let mut commit_file = File::create(&commit_file_path)?;
     commit_file.write_all(commit_content.as_bytes())?;
+
+
+    let path_to_refs_heads = env::var("heads_ref").unwrap();
+
+    let mut main = File::create(format!("{}/main",path_to_refs_heads)).unwrap();
+
+    let _ = main.write_all(commit_hash.as_bytes());
+
+    let mut head_file = File::create(env::var("heads").unwrap())?;
+
+    let _ = head_file.write_all(format!("ref: {}/main\n",path_to_refs_heads).as_bytes());
 
     Ok(())
 }
@@ -228,7 +312,7 @@ fn create_tree_from_index(base_directory: &str) -> io::Result<TreeEntry> {
     let mut tree_entries = Vec::new();
 
     
-    let index_file = File::open("../../.gitrs/index")?;
+    let index_file = File::open(env::var("index").unwrap().as_str())?;
     let reader = io::BufReader::new(index_file);
 
     for line_result in reader.lines() {
@@ -247,36 +331,36 @@ fn create_tree_from_index(base_directory: &str) -> io::Result<TreeEntry> {
                     .iter_mut()
                     .find(|entry| matches!(entry, TreeEntry::Tree { name, .. } if name == subdirectory));
 
-                if let Some(TreeEntry::Tree { entries, .. }) = subdirectory_entry {
+                if let Some(TreeEntry::Tree { entries: _, .. }) = subdirectory_entry {
                     let remaining_path = name.split('/').skip(1).collect::<Vec<&str>>().join("/");
-                    create_tree_entry(&remaining_path, mode, hash, name)?
+                    create_tree_entry(&remaining_path, mode.to_owned(), hash, name)?
                 } else {
-                    let tree_entry = create_tree_entry(name, mode, hash, name)?;
-                    TreeEntry::Tree { mode, hash: hash.to_string(), name: subdirectory.to_string(), entries: vec![tree_entry] }
+                    let tree_entry = create_tree_entry(name, mode.to_owned(), hash, name)?;
+                    TreeEntry::Tree { mode: mode.to_string(), hash: hash.to_string(), name: subdirectory.to_string(), entries: vec![tree_entry] }
                 }
             } else {
                 
-                create_tree_entry(name, mode, hash, name)?
+                create_tree_entry(name, mode.to_owned(), hash, name)?
             };
 
             tree_entries.push(entry);
         }
     }
 
-    Ok(TreeEntry::Tree { mode: "040000", hash: "".to_string(), name: base_directory.to_string(), entries: tree_entries })
+    Ok(TreeEntry::Tree { mode: "040000".to_owned(), hash: "".to_string(), name: base_directory.to_string(), entries: tree_entries })
 }
 
-fn create_tree_entry(name: &str, mode: &'static str, hash: &str, full_path: &str) -> io::Result<TreeEntry> {
+fn create_tree_entry(name: &str, mode:  String, hash: &str, full_path: &str) -> io::Result<TreeEntry> {
     let path_parts: Vec<&str> = full_path.split('/').collect();
     if path_parts.len() == 1 {
         
-        Ok(TreeEntry::Blob { mode, hash: hash.to_string(), name: name.to_string() })
+        Ok(TreeEntry::Blob { mode: mode.to_string(), hash: hash.to_string(), name: name.to_string() })
     } else {
         
         let subdirectory_name = path_parts[0];
         let remaining_path = path_parts[1..].join("/");
         let subdirectory_entry = create_tree_entry(name, mode, hash, &remaining_path)?;
-        Ok(TreeEntry::Tree { mode: "040000", hash: "".to_string(), name: subdirectory_name.to_string(), entries: vec![subdirectory_entry] })
+        Ok(TreeEntry::Tree { mode: "040000".to_owned(), hash: "".to_string(), name: subdirectory_name.to_string(), entries: vec![subdirectory_entry] })
     }
 }
 
@@ -296,7 +380,7 @@ fn hash_tree(tree:TreeEntry) -> String {
             let tree_str = hash_tree_entry(&TreeEntry::Tree {mode,hash,name,entries});
             hash_string(&tree_str)
         }
-        TreeEntry::Blob { mode, hash, name } => todo!(),
+        TreeEntry::Blob { mode: _, hash: _, name: _ } => todo!(),
     }
 }
 
@@ -308,21 +392,30 @@ fn hash_string(input: &str) -> String {
 }
 
 fn read_head() -> io::Result<String> {
-    let path = format!(".gitrs/HEAD");
+    let path = format!("{}", env::var("heads").unwrap());
     let mut file = File::open(path)?;
     let mut content = String::new();  
     file.read_to_string(&mut content)?;
     Ok(content.trim().to_string())
 }
 
-fn rebuild_tree() -> io::Result<TreeEntry> {
-    let head_hash = read_head()?;
-    let root_tree = read_object(&head_hash)?;
-    Ok(root_tree)
+fn rebuild_tree(hash: String) -> io::Result<Option<TreeEntry>> {
+    match read_object(&hash) {
+        Ok(tree) => Ok(Some(tree)),
+        Err(e) => {
+            if e.kind() == io::ErrorKind::NotFound {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 fn read_object(hash: &str) -> io::Result<TreeEntry> {
-    let path = format!(".gitrs/objects/{}.bin", hash);
+
+    let objects_path = env::var("objects").unwrap();
+    let path = format!("{}/{}.bin",objects_path, hash);
     let mut file = File::open(path)?;
     let mut content = String::new();
     file.read_to_string(&mut content)?;
@@ -343,20 +436,19 @@ fn read_object(hash: &str) -> io::Result<TreeEntry> {
 
                     if let Some(TreeEntry::Tree { entries, .. }) = subdirectory_entry {
                         let remaining_path = name.split('/').skip(1).collect::<Vec<&str>>().join("/");
-                        create_tree_entry(&remaining_path, mode, hash, name)?
+                        create_tree_entry(name, mode.to_owned(), hash, &remaining_path.to_owned())?
                     } else {
-                        let tree_entry = create_tree_entry(name, mode, hash, name)?;
-                        TreeEntry::Tree { mode, hash: hash.to_string(), name: subdirectory.to_string(), entries: vec![tree_entry] }
+                        let tree_entry = create_tree_entry(name, mode.to_owned(), hash, name)?;
+                        TreeEntry::Tree { mode: mode.to_string(), hash: hash.to_string(), name: subdirectory.to_string(), entries: vec![tree_entry] }
                     }
                 } else {
-                    create_tree_entry(name, mode, hash, name)?
+                    create_tree_entry(name, mode.to_owned(), hash, name)?
                 };
                 tree_entries.push(entry);
             }
         }
-        Ok(TreeEntry::Tree { mode: "040000", hash: "".to_string(), name: "".to_string(), entries: tree_entries })
+        Ok(TreeEntry::Tree { mode: "040000".to_owned(), hash: "".to_string(), name: "".to_string(), entries: tree_entries })
     } else {
-        // Handle blob case
-        Ok(TreeEntry::Blob { mode: "100644", hash: "".to_string(), name: "".to_string() })
+        Ok(TreeEntry::Blob { mode: "100644".to_owned(), hash: "".to_string(), name: "".to_string() })
     }
 }
