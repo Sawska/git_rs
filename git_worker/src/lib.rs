@@ -1,5 +1,6 @@
 use std::io::{self,BufRead, Read,Write, SeekFrom,Seek,BufReader};
 use std::fs::{self,File,OpenOptions};
+use std::collections::HashSet;
 use std::time::{SystemTime,UNIX_EPOCH};
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
@@ -19,9 +20,7 @@ enum IndexCheckResult {
     Error(io::Error),
 }
 
-pub fn status() {
-    // gives iformation about current directory status
-}
+
 
 
 pub fn init() {
@@ -248,7 +247,7 @@ pub fn add_all(base_directory:&str) -> io::Result<()> {
                 } else if path.is_file() {
                     match check_if_in_index(path.to_str().unwrap()) {
                         IndexCheckResult::InIndex(hashed_line) => {
-                            remove_file_from_index(env::var("index").unwrap().as_str(),&hashed_line)?;
+                            remove_file_from_index(&path.to_str().unwrap())?;
                         }
                         IndexCheckResult::NotInIndex => {
                             add_to_objects(&path.to_str().unwrap())?;
@@ -343,13 +342,13 @@ fn check_if_in_index(file_path: &str) -> IndexCheckResult {
 
     let reader = io::BufReader::new(index_file);
 
-    let hashed_line = hash_line(file_path);
+    // let hashed_line = hash_line(file_path);
 
     for line_result in reader.lines() {
         if let Ok(line) = line_result {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() == 3 && parts[2] == hashed_line {
-                return IndexCheckResult::InIndex(hashed_line);
+            if parts.len() == 3 && parts[2] == file_path {
+                return IndexCheckResult::InIndex(file_path.to_string());
             }
         }
     }
@@ -357,8 +356,8 @@ fn check_if_in_index(file_path: &str) -> IndexCheckResult {
     IndexCheckResult::NotInIndex
 }
 
-fn remove_file_from_index(file_path: &str, hashed_line: &str) -> io::Result<()> {
-    let index_file = match File::open(file_path) {
+fn remove_file_from_index(file_path: &str) -> io::Result<()> {
+    let index_file = match File::open(env::var("index").unwrap()) {
         Ok(file) => file,
         Err(err) => return Err(err),
     };
@@ -369,15 +368,15 @@ fn remove_file_from_index(file_path: &str, hashed_line: &str) -> io::Result<()> 
         .lines()
         .filter(|line| line.as_ref().map_or(false, |l| {
             let parts: Vec<&str> = l.split_whitespace().collect();
-            if parts.len() == 3 && parts[2] == hashed_line {
-                return false;
+            if parts.len() == 3 && parts[2] != file_path {
+                return true;
             }
-            true
+            false
         }))
         .map(|line| line.unwrap())
         .collect();
 
-    let mut file = OpenOptions::new().write(true).truncate(true).open(file_path)?;
+    let mut file = OpenOptions::new().write(true).truncate(true).open(env::var("index").unwrap())?;
 
     for line in lines {
         writeln!(file, "{}", line)?;
@@ -385,6 +384,7 @@ fn remove_file_from_index(file_path: &str, hashed_line: &str) -> io::Result<()> 
 
     Ok(())
 }
+
 
 #[derive(Debug)]
 enum Config {
@@ -690,4 +690,122 @@ fn read_object(hash: &str) -> io::Result<TreeEntry> {
     } else {
         Ok(TreeEntry::Blob { mode: "100644".to_owned(), hash: "".to_string(), name: "".to_string() })
     }
+}
+
+pub fn status() {
+    let  index_list = create_list_from_index().unwrap();
+    let  file_list = create_list_from_base_directory("../../.gitrs").unwrap();
+
+    let mut status: Vec<String> = Vec::new();
+    let mut cache: HashSet<String> = HashSet::new();
+
+    if index_list.len() > file_list.len() {
+        for i in 0..index_list.len() {
+
+            let file = &index_list[i];
+
+            if file_list.contains(file) {
+                // compare contents of a files
+            } else {
+                let file_name: Vec<&str> = file.split("/").collect();
+                let resp = format!("{} deleted", file_name.last().unwrap_or(&""));
+                status.push(resp);
+                cache.insert(file.to_string());
+            }
+        }
+    } else {
+        for i in 0..file_list.len() {
+            let file = &file_list[i];
+
+            if index_list.contains(file) {
+                // compare contents of a files
+            } else {
+                let file_name: Vec<&str> = file.split("/").collect();
+                let resp = format!("{} untracked", file_name.last().unwrap_or(&""));
+                status.push(resp);
+                cache.insert(file.to_string());
+            }
+        }
+    }
+    for file in index_list {
+        if !cache.contains(&file.to_string()) {
+            let file_name: Vec<&str> = file.split("/").collect();
+            let resp = format!("{} deleted", file_name.last().unwrap_or(&""));
+            status.push(resp);
+            cache.insert(file.to_string());
+        }
+    }
+
+    for file in file_list {
+        if !cache.contains(&file.to_string()) {
+            let file_name: Vec<&str> = file.split("/").collect();
+            let resp = format!("{} untracked", file_name.last().unwrap_or(&""));
+            status.push(resp);
+            cache.insert(file.to_string());
+        }
+    }
+}
+
+fn is_same(in_index:&str,original:&str) -> Result<bool, std::io::Error> {
+    let f1 = File::open(in_index)?;
+    let f2 = File::open(original)?;
+
+    if f1.metadata().unwrap().len() != f2.metadata().unwrap().len() {
+        return Ok(false);
+    }
+
+    
+    let f1 = BufReader::new(f1);
+    let f2 = BufReader::new(f2);
+
+    
+    for (b1, b2) in f1.bytes().zip(f2.bytes()) {
+        if b1.unwrap() != b2.unwrap() {
+            return Ok(false);
+        }
+    }
+
+    return Ok(true);
+}
+
+
+
+fn create_list_from_index() -> io::Result<Vec<String>>  {
+    let index_file =  File::open(env::var("index").unwrap()).unwrap();
+
+    let reader = BufReader::new(index_file);
+
+    let mut  arr:Vec<String> = Vec::new();
+
+    for lines in reader.lines() {
+        if let Ok(line) = lines{
+            let parts:Vec<&str> = line.split_whitespace().collect();
+            arr.push(parts[2].to_string());
+        }
+    }
+    Ok(arr)
+}
+
+fn create_list_from_base_directory(base_directory:&str) -> io::Result<Vec<String>> {
+    
+
+    let mut arr:Vec<String> = Vec::new();
+    if let Ok(entries) = fs::read_dir(base_directory) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                let file_name = entry.file_name();
+
+                if path.is_dir() && file_name != ".gitrs" && file_name != ".git" {
+                    let vec = create_list_from_base_directory(path.to_str().unwrap()).unwrap();
+
+                    arr.extend(vec);
+
+                } else if path.is_file() {
+                    arr.push(path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    Ok(arr)
 }
