@@ -1,4 +1,5 @@
-use std::ops::Deref;
+use std::path::PathBuf;
+use std::{ops::Deref, env};
 use std::io;
 
 use structopt::StructOpt;
@@ -11,11 +12,10 @@ pub enum Command {
     },
     #[structopt(name = "add")]
     Add {
-        path:String,
+        #[structopt(parse(from_os_str), help = "Specify the path")]
+        path: Option<PathBuf>,
         #[structopt(flatten)]
-        opts:AddOptions,
-
-        
+        opts: AddOptions,
     },
     #[structopt(name = "reset")]
     Reset {
@@ -121,11 +121,17 @@ pub fn use_command() {
             }
         Command::Add { path ,opts} =>  {
             
-            if opts.all {
-                add_all("../../.gitrs");
+            let target_path = if opts.all {
+                None // Add all files in the current directory
             } else {
-                add_all(&path);
-            }            
+                path
+            };
+
+            
+            match target_path {
+                Some(p) => add_all(p.to_str().unwrap()), 
+                None => add_all("."),
+            };
             
         },
         Command::Reset {  } => {

@@ -1,3 +1,4 @@
+use std::env;
 use std::io::{self,BufRead, Read,Write, SeekFrom,Seek,BufReader};
 use std::fs::{self,File,OpenOptions};
 use std::collections::HashSet;
@@ -5,7 +6,16 @@ use std::time::{SystemTime,UNIX_EPOCH};
 use crypto::digest::Digest;
 use crypto::sha2::Sha256;
 use sha1::{Sha1,Digest as OtherDigest};
-use std::env::{self, var};
+use walkdir::WalkDir;
+
+
+const GIT: &str = ".gitrs";
+const REFS:&str = ".gitrs/refs";
+const OBJECTS:&str = ".gitrs/objects";
+const HEADS_REF:&str = ".gitrs/refs/heads";
+const HEADS:&str = "heads";
+const INDEX:&str = ".gitrs/index";
+const CONFIG:&str = ".gitrs/index";
 
 enum TreeEntry {
     Blob {mode: String,hash:String,name:String},
@@ -24,32 +34,32 @@ enum IndexCheckResult {
 
 
 pub fn init() {
-    let _ = fs::create_dir_all("../../.gitrs");
-    env::set_var(".gitrs", "../../.gitrs");
-    // pointers to specific commit
-    let _ = fs::create_dir_all("../../.gitrs/refs");
-    env::set_var("refs", "../../.gitrs/refs");
+    let _ = fs::create_dir_all(GIT);
+    
+    
+    let _ = fs::create_dir_all(REFS);
+    
     // git stores commits here
-    let _ = fs::create_dir_all("../../.gitrs/objects");
-    env::set_var("objects", "../../.gitrs/objects");
-    //contains references to the heads of branches.
-    let _ = File::create("../../.gitrs/refs/heads");
-    env::set_var("heads_ref", "../../.gitrs/refs/heads");
+    let _ = fs::create_dir_all(OBJECTS);
+    
+    
+    let _ = File::create(HEADS_REF);
+    
 
-    //points to the last commit
-    let _ = File::create("../../.gitrs/HEAD");
-    env::set_var("heads", "../../.gitrs/HEAD");
+    
+    let _ = File::create(HEADS);
+    
 
     create_branch("main", "");
     update_head("main");
 
     //stored permanents add files
-    let _ = File::create("../../.gitrs/index");
-    env::set_var("index", "../../.gitrs/index");
+    let _ = File::create(INDEX);
+    
     
     //config file for git
-    let _ = File::create("../../.gitrs/config");
-    env::set_var("config","../../.gitrs/config");
+    let _ = File::create(CONFIG);
+    
     fill_config();
 
     println!("created .gitrs file");
@@ -63,9 +73,9 @@ pub fn create_branch(branch_name:&str,content:&str) {
 
 fn update_head(branch_name:&str) -> io::Result<()> {
 
-    let mut head_file = File::create(env::var("heads").unwrap())?;
+    let mut head_file = File::create(HEADS)?;
 
-    let path_to_refs_heads = env::var("heads_ref").unwrap();
+    let path_to_refs_heads = HEADS_REF;
 
     let content = format!("refs: {}/{}\n",path_to_refs_heads,branch_name);
 
@@ -84,7 +94,7 @@ pub fn delete_brench(name:&str) {
 
                 match current_brench {
                     Ok(path) => {
-                        let path_for_this = format!("{}/{}",env::var("heads_ref").unwrap(),name);
+                        let path_for_this = format!("{}/{}",HEADS_REF,name);
                         let is_equal = path == path_for_this;
 
                         if is_equal {
@@ -109,7 +119,7 @@ fn delete(path:&str) {
 }
 
 pub fn list_branches() -> String {
-    let dir = fs::read_dir(env::var("heads_ref").unwrap()).unwrap();
+    let dir = fs::read_dir(HEADS_REF).unwrap();
 
     let mut res = String::new();
 
@@ -147,7 +157,7 @@ pub fn checkout_b(branch_name:&str) {
 
 
 fn find_branch(name:&str) -> io::Result<bool> {
-    let refs = fs::read_dir(env::var("heads_ref").unwrap()).unwrap();
+    let refs = fs::read_dir(HEADS_REF).unwrap();
 
     let mut is_branch = false;
 
@@ -163,7 +173,7 @@ fn find_branch(name:&str) -> io::Result<bool> {
 
 fn create_branch_in_refs(branch_name:&str,content:&str) -> io::Result<()> {
     
-    let file_path = format!("{}/{}",env::var("heads_ref").unwrap(),branch_name);
+    let file_path = format!("{}/{}",HEADS_REF,branch_name);
 
     let mut refs  = File::create(file_path)?;
 
@@ -173,7 +183,7 @@ fn create_branch_in_refs(branch_name:&str,content:&str) -> io::Result<()> {
 }
 
 fn fill_config()  -> io::Result<()> {
-    let mut config_file = File::create(env::var("config").unwrap())?;
+    let mut config_file = File::create(CONFIG)?;
 
     let default_name = "Your name";
 
@@ -193,7 +203,7 @@ fn fill_config()  -> io::Result<()> {
 
 pub fn set_user_input(part_to_match: &str, user_value: &str) -> io::Result<()> {
     
-    let config_path = env::var("config").unwrap();
+    let config_path = CONFIG;
     let mut config_file = OpenOptions::new().read(true).write(true).open(&config_path)?;
 
     
@@ -236,13 +246,21 @@ pub fn set_user_input(part_to_match: &str, user_value: &str) -> io::Result<()> {
 }
 
 pub fn add_all(base_directory:&str) -> io::Result<()> {
-    if let Ok(entries) = fs::read_dir(base_directory) {
-        for entry in entries {
+    if let Ok(current_dir) = env::current_dir() {
+        println!("Current directory: {:?}", current_dir);
+    } else {
+        eprintln!("Error getting current directory");
+        
+    }
+    // if let Ok(entries) = fs::read_dir(base_directory) {
+        for entry in WalkDir::new(base_directory) {
             if let Ok(entry) = entry {
                 let file_name = entry.file_name();
                 let path = entry.path();
+                println!("Processing: {:?}", file_name);
 
                 if path.is_dir() && file_name != ".gitrs" && file_name != ".git" {
+                    println!("Processing directory: {:?}", path);
                     add_all(&path.to_str().unwrap())?;
                 } else if path.is_file() {
                     match check_if_in_index(path.to_str().unwrap()) {
@@ -250,6 +268,7 @@ pub fn add_all(base_directory:&str) -> io::Result<()> {
                             remove_file_from_index(&path.to_str().unwrap())?;
                         }
                         IndexCheckResult::NotInIndex => {
+                            println!("file {} not in index",&path.to_str().unwrap());
                             add_to_objects(&path.to_str().unwrap())?;
                         }
                         IndexCheckResult::Error(err) => {
@@ -259,7 +278,7 @@ pub fn add_all(base_directory:&str) -> io::Result<()> {
                 }
             }
         }
-    }
+    // }
 
     Ok(())
 }
@@ -301,7 +320,7 @@ fn add_to_objects(path:&str) -> io::Result<()> {
 
     let name_dir = &arr[0][0..1];
 
-    let objects_dir = env::var("objects").unwrap_or_else(|_| String::from(".gitrs/objects"));
+    let objects_dir = OBJECTS;
     fs::create_dir(format!("{}/{}",objects_dir,name_dir))?;
 
     let another_name = &arr.join("");
@@ -323,7 +342,7 @@ fn add_to_objects(path:&str) -> io::Result<()> {
 
 fn add_to_index(arr: &Vec<String>,file_path:&str) -> io::Result<()> {
 
-    let mut index_file = OpenOptions::new().create(true).append(true).open(env::var("index").unwrap())?;
+    let mut index_file = OpenOptions::new().create(true).append(true).open(INDEX)?;
 
     for line in arr {
         let index_line = format!("{} 100644 {}",line,file_path);
@@ -335,7 +354,8 @@ fn add_to_index(arr: &Vec<String>,file_path:&str) -> io::Result<()> {
 }
 
 fn check_if_in_index(file_path: &str) -> IndexCheckResult {
-    let index_file = match File::open(env::var("index").unwrap()) {
+    let path = INDEX;
+    let index_file = match File::open(path) {
         Ok(file) => file,
         Err(err) => return IndexCheckResult::Error(err),
     };
@@ -357,7 +377,7 @@ fn check_if_in_index(file_path: &str) -> IndexCheckResult {
 }
 
 fn remove_file_from_index(file_path: &str) -> io::Result<()> {
-    let index_file = match File::open(env::var("index").unwrap()) {
+    let index_file = match File::open(INDEX) {
         Ok(file) => file,
         Err(err) => return Err(err),
     };
@@ -376,7 +396,7 @@ fn remove_file_from_index(file_path: &str) -> io::Result<()> {
         .map(|line| line.unwrap())
         .collect();
 
-    let mut file = OpenOptions::new().write(true).truncate(true).open(env::var("index").unwrap())?;
+    let mut file = OpenOptions::new().write(true).truncate(true).open(INDEX)?;
 
     for line in lines {
         writeln!(file, "{}", line)?;
@@ -393,7 +413,7 @@ enum Config {
 }
 
 fn read_info_from_config() -> io::Result<Vec<Config>> {
-    let config_file_path = env::var("config").unwrap();
+    let config_file_path = CONFIG;
     let config_file = File::open(&config_file_path)?;
     let reader = BufReader::new(config_file);
 
@@ -516,7 +536,7 @@ fn create_commit_object(author:&str,commiter:&str,tree_hash:&str,commit_message:
 
     let commit_hash = hash_line(&commit_content);
 
-    let objects_path = env::var("objects").unwrap();
+    let objects_path = OBJECTS;
     let commit_file_path = format!("{}/{}.bin",objects_path,commit_hash);
     let mut commit_file = File::create(&commit_file_path)?;
     commit_file.write_all(commit_content.as_bytes())?;
@@ -537,7 +557,7 @@ fn create_tree_from_index(base_directory: &str) -> io::Result<TreeEntry> {
     let mut tree_entries = Vec::new();
 
     
-    let index_file = File::open(env::var("index").unwrap().as_str())?;
+    let index_file = File::open(INDEX)?;
     let reader = io::BufReader::new(index_file);
 
     for line_result in reader.lines() {
@@ -618,7 +638,7 @@ fn hash_string(input: &str) -> String {
 
 fn read_head() -> io::Result<String> {
     
-    let path = format!("{}", env::var("heads").unwrap());
+    let path = format!("{}", HEADS);
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut branch_path = String::new();
@@ -653,7 +673,7 @@ fn rebuild_tree(hash: String) -> io::Result<Option<TreeEntry>> {
 
 fn read_object(hash: &str) -> io::Result<TreeEntry> {
 
-    let objects_path = env::var("objects").unwrap();
+    let objects_path = OBJECTS;
     let path = format!("{}/{}.bin",objects_path, hash);
     let mut file = File::open(path)?;
     let mut content = String::new();
@@ -692,9 +712,12 @@ fn read_object(hash: &str) -> io::Result<TreeEntry> {
     }
 }
 
+// objects
+
+
 pub fn status() {
     let  index_list = create_list_from_index().unwrap();
-    let  file_list = create_list_from_base_directory("../../.gitrs").unwrap();
+    let  file_list = create_list_from_base_directory(".gitrs").unwrap();
 
     let mut status: Vec<String> = Vec::new();
     let mut cache: HashSet<String> = HashSet::new();
@@ -706,6 +729,7 @@ pub fn status() {
 
             if file_list.contains(file) {
                 // compare contents of a files
+
             } else {
                 let file_name: Vec<&str> = file.split("/").collect();
                 let resp = format!("{} deleted", file_name.last().unwrap_or(&""));
@@ -771,7 +795,7 @@ fn is_same(in_index:&str,original:&str) -> Result<bool, std::io::Error> {
 
 
 fn create_list_from_index() -> io::Result<Vec<String>>  {
-    let index_file =  File::open(env::var("index").unwrap()).unwrap();
+    let index_file =  File::open(INDEX).unwrap();
 
     let reader = BufReader::new(index_file);
 
